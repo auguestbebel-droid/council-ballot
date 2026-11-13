@@ -1,10 +1,11 @@
 import { applyAction, viewState } from './workflow.js'
-import { buildDemo, demoActors } from './demo.js'
+import { createDemo, demoActors, migrateDemo } from './demo.js?v=2'
 
 const app = document.querySelector('#app')
 const dialog = document.querySelector('#dialog')
 const toast = document.querySelector('#toast')
-const storageKey = 'council-ballot-demo-v1'
+const storageKey = 'council-ballot-demo-v2'
+const legacyStorageKey = 'council-ballot-demo-v1'
 const roles = { member: '正式成员', reviewer: '动议审核员', representative: '全国代表', coordinator: '统筹组', admin: '管理员' }
 const stages = { review: '待审核', challenge: '异议期', override: '推翻表决', discussion: '小组讨论', ballot: '表决中', report: '待通报', assignment: '待指派', execution: '执行中', resolved: '已完成', failed: '未形成决议', stopped: '已停止' }
 const actionNames = { review: '提交审核决定', challenge: '提出推翻动议', closeChallenge: '确认审核决定生效', discuss: '提交讨论摘要', openBallot: '开启代表表决', vote: '提交选票', closeBallot: '结束表决并计票', publish: '发布通报', assign: '指派执行人', complete: '提交执行报告' }
@@ -49,15 +50,28 @@ function displayToast(message) {
 }
 
 function saveDemo() {
-  try { localStorage.setItem(storageKey, JSON.stringify(demo)) } catch { /* Preview can continue in memory. */ }
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(demo))
+    localStorage.removeItem(legacyStorageKey)
+  } catch { /* Preview can continue in memory. */ }
+}
+
+function readDemo(key) {
+  const stored = JSON.parse(localStorage.getItem(key))
+  if (Array.isArray(stored?.state?.motions) && Array.isArray(stored.state.notices) &&
+      Number.isInteger(stored.state.nextId) && Number.isFinite(stored.offset) &&
+      demoActors.some(person => person.id === stored.actorId)) return stored
+  return null
 }
 
 function loadDemo() {
   try {
-    const stored = JSON.parse(localStorage.getItem(storageKey))
-    if (stored?.state?.motions && Number.isFinite(stored.offset) && demoActors.some(person => person.id === stored.actorId)) return stored
-  } catch { /* A new demo can start when storage is unavailable. */ }
-  return { state: buildDemo(), offset: 0, actorId: demoActors[0].id }
+    const stored = readDemo(storageKey)
+    if (stored) return stored
+    const legacy = readDemo(legacyStorageKey)
+    if (legacy) return migrateDemo(legacy)
+  } catch { /* Preview can continue in memory. */ }
+  return demo ?? createDemo()
 }
 
 function refreshDemo() {
@@ -142,7 +156,7 @@ function home() {
     ['◈', '正在表决', state.motions.filter(isVoting).length, 'voting'],
     ['◇', '已形成决议', state.motions.filter(isResolution).length, 'nav:resolutions']
   ]
-  return `${heading('工作台', '查看动议进展，处理待办事项。', `<p class="page-date">${icon('▦')}${longDateFormat.format(now())}</p>`)}<section class="hero"><div><h2>${canCreate() ? '发起组织动议' : '查看组织动议'}</h2><p>地区事务由本地区表决。全国动议经审核与通报后，按指定方式表决。</p><div class="hero-actions">${canCreate() ? button('create', '发起动议', 'hero-main', '+') : button('nav:motions', '查看动议', 'hero-main')}${button('nav:flow', '查看投票流程', 'hero-alt', '↗')}</div></div><div class="hero-art" aria-hidden="true"><span class="art-card">✓</span></div></section><div class="metrics">${metrics.map(([glyph, label, value, target]) => `<button class="metric" type="button" data-do="${target}"><span class="metric-icon icon" aria-hidden="true">${glyph}</span><span><span class="caption">${label}</span><b>${value}</b></span></button>`).join('')}</div><div class="board">${table('动议一览', '按最近更新排序', true)}<div class="side-stack"><section class="panel"><header class="panel-head"><div><h2>最新通报</h2><p>发给全国代表的流程通报</p></div>${button('nav:notices', '全部', 'ghost compact', '↗')}</header>${noticeList(state.notices.slice(0, 3))}</section><section class="guide">${button(isDemo ? 'actor' : 'nav:flow', isDemo ? '切换演示身份' : '查看流程说明', 'ghost compact', '⇄')}<p>${isDemo ? '以成员、代表、审核员或统筹组身份体验完整流程。' : '查看审核、表决、通报与执行的步骤。'}</p></section></div></div>`
+  return `${heading('工作台', '查看动议进展，处理待办事项。', `<p class="page-date">${icon('▦')}${longDateFormat.format(now())}</p>`)}<section class="hero"><div><h2>${canCreate() ? '发起组织动议' : '查看组织动议'}</h2><p>地区事务由本地区表决。全国动议经审核与通报后，按指定方式表决。</p><div class="hero-actions">${canCreate() ? button('create', '发起动议', 'hero-main', '+') : button('nav:motions', '查看动议', 'hero-main')}${button('nav:flow', '查看投票流程', 'hero-alt', '↗')}</div></div></section><div class="metrics">${metrics.map(([glyph, label, value, target]) => `<button class="metric" type="button" data-do="${target}"><span class="metric-icon icon" aria-hidden="true">${glyph}</span><span><span class="caption">${label}</span><b>${value}</b></span></button>`).join('')}</div><div class="board">${table('动议一览', '按最近更新排序', true)}<div class="side-stack"><section class="panel"><header class="panel-head"><div><h2>最新通报</h2><p>发给全国代表的流程通报</p></div>${button('nav:notices', '全部', 'ghost compact', '↗')}</header>${noticeList(state.notices.slice(0, 3))}</section><section class="guide">${button(isDemo ? 'actor' : 'nav:flow', isDemo ? '切换演示身份' : '查看流程说明', 'ghost compact', '⇄')}<p>${isDemo ? '以成员、代表、审核员或统筹组身份体验完整流程。' : '查看审核、表决、通报与执行的步骤。'}</p></section></div></div>`
 }
 
 function flowPage() {
@@ -326,7 +340,7 @@ function routeAction(command) {
     return showActorMenu()
   }
   if (type === 'reset') {
-    return formDialog('重置演示', 'reset', '<p class="form-help">将清除当前浏览器的演示进度并恢复示例动议。</p>', '确认重置')
+    return formDialog('重置演示', 'reset', '<p class="form-help">将清除当前浏览器里的演示动议、通报和操作进度。</p>', '确认重置')
   }
   if (type === 'refresh') return updateFromServer()
   if (type === 'logout') {
@@ -368,7 +382,7 @@ async function submitForm(form) {
       return
     }
     if (type === 'reset') {
-      demo = { state: buildDemo(), offset: 0, actorId: demoActors[0].id }
+      demo = createDemo()
       saveDemo()
       refreshDemo()
       dialog.close()
