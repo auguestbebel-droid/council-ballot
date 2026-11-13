@@ -113,7 +113,7 @@ function actorMarkup(person) {
 }
 
 function brand() {
-  return `<img src="./favicon.svg" alt="" width="42" height="42"><span><strong>议决台</strong><small>组织决议工作台</small></span>`
+  return `<img src="./favicon.svg?v=3" alt="" width="42" height="42"><span><strong>议决台</strong><small>组织决议工作台</small></span>`
 }
 
 function shell(content) {
@@ -159,6 +159,103 @@ function home() {
   return `${heading('工作台', '查看动议进展，处理待办事项。', `<p class="page-date">${icon('▦')}${longDateFormat.format(now())}</p>`)}<section class="hero"><div><h2>${canCreate() ? '发起组织动议' : '查看组织动议'}</h2><p>地区事务由本地区表决。全国动议经审核与通报后，按指定方式表决。</p><div class="hero-actions">${canCreate() ? button('create', '发起动议', 'hero-main', '+') : button('nav:motions', '查看动议', 'hero-main')}${button('nav:flow', '查看投票流程', 'hero-alt', '↗')}</div></div></section><div class="metrics">${metrics.map(([glyph, label, value, target]) => `<button class="metric" type="button" data-do="${target}"><span class="metric-icon icon" aria-hidden="true">${glyph}</span><span><span class="caption">${label}</span><b>${value}</b></span></button>`).join('')}</div><div class="board">${table('动议一览', '按最近更新排序', true)}<div class="side-stack"><section class="panel"><header class="panel-head"><div><h2>最新通报</h2><p>发给全国代表的流程通报</p></div>${button('nav:notices', '全部', 'ghost compact', '↗')}</header>${noticeList(state.notices.slice(0, 3))}</section><section class="guide">${button(isDemo ? 'actor' : 'nav:flow', isDemo ? '切换演示身份' : '查看流程说明', 'ghost compact', '⇄')}<p>${isDemo ? '以成员、代表、审核员或统筹组身份体验完整流程。' : '查看审核、表决、通报与执行的步骤。'}</p></section></div></div>`
 }
 
+function flowNode(title, description = '', kind = '') {
+  return `<div class="flow-node ${kind}"><strong>${title}</strong>${description ? `<p>${description}</p>` : ''}</div>`
+}
+
+function flowArrow(label = '') {
+  return `<div class="flow-arrow"${label ? '' : ' aria-hidden="true"'}>${label ? `<span>${label}</span>` : ''}<i aria-hidden="true"></i></div>`
+}
+
+function flowDiagram() {
+  return `<figure class="panel flow-diagram" aria-labelledby="flow-diagram-title">
+    <figcaption><h2 id="flow-diagram-title">组织决议投票流程图</h2></figcaption>
+    <div class="flow-diagram-entry">
+      ${flowNode('正式成员发起动议', '', 'flow-start')}
+      ${flowArrow()}
+      ${flowNode('仅涉及地区内部事务？', '', 'flow-decision')}
+    </div>
+    <ul class="flow-branches flow-routes" role="list">
+      <li>
+        ${flowArrow('是 · 地区事务')}
+        <div class="flow-lane">
+          ${flowNode('地区自行表决', '仅限本地区成员参与。')}
+          ${flowArrow()}
+          ${flowNode('脱敏后通报全国代表', '只公布通过与否。', 'flow-end')}
+        </div>
+      </li>
+      <li>
+        ${flowArrow('否 · 全国动议')}
+        <div class="flow-lane">
+          ${flowNode('动议审核员作出决定', '决定是否接受原动议，并确定表决范围和方式。')}
+          ${flowArrow()}
+          ${flowNode('审核决定通报全国代表')}
+          ${flowArrow()}
+          ${flowNode('异议期内有代表提出推翻动议？', '', 'flow-decision')}
+          <ul class="flow-branches" role="list">
+            <li>
+              ${flowArrow('否 · 异议期届满')}
+              ${flowNode('原审核决定生效')}
+            </li>
+            <li>
+              ${flowArrow('是 · 提出推翻动议')}
+              ${flowNode('全国代表直接表决', '全国代表按人投票，无需审核员审核。')}
+              ${flowArrow()}
+              ${flowNode('推翻动议通过？', '', 'flow-decision')}
+              <ul class="flow-branches flow-compact" role="list">
+                <li>
+                  ${flowArrow('否')}
+                  ${flowNode('原审核决定生效')}
+                </li>
+                <li>
+                  ${flowArrow('是')}
+                  ${flowNode('撤销原审核决定', '原决定接受则改为停止，原决定停止则改为发起投票。')}
+                </li>
+              </ul>
+            </li>
+          </ul>
+          ${flowArrow('依据生效决定')}
+          ${flowNode('原动议是否进入投票？', '', 'flow-decision')}
+          <ul class="flow-branches" role="list">
+            <li>
+              ${flowArrow('否 · 停止原动议')}
+              ${flowNode('审核员通报处理结果', '', 'flow-end')}
+            </li>
+            <li>
+              ${flowArrow('是 · 进入表决')}
+              ${flowNode('采用哪种表决方式？', '', 'flow-decision')}
+              <ul class="flow-branches flow-compact" role="list">
+                <li>
+                  ${flowArrow('代表表决')}
+                  ${flowNode('各地小组先讨论')}
+                  ${flowArrow()}
+                  ${flowNode('代表按组投票')}
+                </li>
+                <li>
+                  ${flowArrow('全体成员表决')}
+                  ${flowNode('成员直接投票')}
+                </li>
+              </ul>
+              ${flowArrow('原动议计票')}
+              ${flowNode('表决通过？', '', 'flow-decision')}
+              <ul class="flow-branches flow-compact" role="list">
+                <li>
+                  ${flowArrow('否')}
+                  ${flowNode('本次表决未形成决议', '', 'flow-end')}
+                </li>
+                <li>
+                  ${flowArrow('是')}
+                  ${flowNode('形成组织决议', '统筹组指派执行人。执行情况向统筹组报告。', 'flow-end flow-confirmed')}
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </div>
+      </li>
+    </ul>
+  </figure>`
+}
+
 function flowPage() {
   const steps = [
     ['正式成员发起动议', '选择地区事务或全国事务。地区成员自行表决，结束后由本地区统筹组向全国代表发布脱敏结果。'],
@@ -167,7 +264,7 @@ function flowPage() {
     ['按表决方式处理', '停止的动议由审核员通报。进入表决的动议可由全体成员直接投票，或在各地小组讨论完毕后由代表按组投票。'],
     ['形成决议并跟进执行', '表决未通过时结束流程。通过后由统筹组指派执行人，执行报告提交给统筹组。']
   ]
-  return `${heading('投票流程', '各角色在动议处理中的职责。')}<div class="detail-grid"><section class="panel section"><h2>动议如何推进</h2><ol class="flow-steps">${steps.map(([title, info]) => `<li><div><h3>${title}</h3><p>${info}</p></div></li>`).join('')}</ol></section><section class="panel section"><h2>计票规则</h2><p>赞成率以赞成票和反对票为基数。弃权票计入投票率。达到最低投票率和赞成门槛方可通过，零票或全部弃权均无法通过。</p><p>通过门槛、最低投票率、投票期和异议期在发起动议时设置。每轮表决按开启时确定的名单计票。</p></section></div>`
+  return `${heading('投票流程', '各角色在动议处理中的职责。')}${flowDiagram()}<div class="detail-grid"><section class="panel section"><h2>动议如何推进</h2><ol class="flow-steps">${steps.map(([title, info]) => `<li><div><h3>${title}</h3><p>${info}</p></div></li>`).join('')}</ol></section><section class="panel section"><h2>计票规则</h2><p>赞成率以赞成票和反对票为基数。弃权票计入投票率。达到最低投票率和赞成门槛方可通过，零票或全部弃权均无法通过。</p><p>通过门槛、最低投票率、投票期和异议期在发起动议时设置。每轮表决按开启时确定的名单计票。</p></section></div>`
 }
 
 function stats(result) {
