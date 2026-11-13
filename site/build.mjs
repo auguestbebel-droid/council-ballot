@@ -4,14 +4,15 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
+const fistAsset = 'assets/fist-outline.svg'
 const textAssets = new Map([
   ['index.html', 'text/html; charset=utf-8'],
   ['styles.css', 'text/css; charset=utf-8'],
   ['app.js', 'text/javascript; charset=utf-8'],
   ['admin.js', 'text/javascript; charset=utf-8'],
   ['favicon.svg', 'image/svg+xml'],
+  [fistAsset, 'image/svg+xml'],
 ])
-const imageAsset = 'assets/rose-hero.jpg'
 
 async function prepare(checkout) {
   assert.ok(isAbsolute(checkout), 'Use the absolute path returned by the Sites source helper.')
@@ -19,7 +20,7 @@ async function prepare(checkout) {
   const manifest = JSON.parse(await readFile(join(checkout, '.openai/hosting.json'), 'utf8'))
   assert.ok(typeof manifest.project_id === 'string' && manifest.project_id, 'Persist the Site project ID first.')
   assert.equal(manifest.d1, 'DB', 'Declare the DB binding in the Site hosting manifest.')
-  const files = ['site/build.mjs', 'site/worker.js', 'docs/workflow.js', ...[...textAssets.keys(), imageAsset].map(path => `docs/${path}`)]
+  const files = ['site/build.mjs', 'site/worker.js', 'docs/workflow.js', ...Array.from(textAssets.keys(), path => `docs/${path}`)]
   for (const name of files) {
     const path = join(checkout, name)
     await mkdir(dirname(path), { recursive: true })
@@ -46,8 +47,6 @@ async function assetModule() {
     }
     assets[`/${name}`] = { type, body }
   }
-  const image = await readFile(join(root, 'docs', imageAsset))
-  assets[`/${imageAsset}`] = { type: 'image/jpeg', body: image.toString('base64'), binary: true }
   return `const staticAssets = ${JSON.stringify(assets)};
 function serveAsset(request) {
   const pathname = new URL(request.url).pathname;
@@ -57,9 +56,7 @@ function serveAsset(request) {
   if (!['GET', 'HEAD'].includes(request.method)) {
     return new Response('该请求方式不可用。', { status: 405, headers: { allow: 'GET, HEAD' } });
   }
-  const body = request.method === 'HEAD' ? null
-    : asset.binary ? Uint8Array.from(atob(asset.body), byte => byte.charCodeAt(0))
-      : asset.body;
+  const body = request.method === 'HEAD' ? null : asset.body;
   return new Response(body, { headers: { 'content-type': asset.type, 'cache-control': 'no-cache' } });
 }`
 }
@@ -94,8 +91,9 @@ async function build() {
   const response = await app.fetch(new Request('https://build-check.example/'), {})
   assert.equal(response.status, 200)
   assert.match(await response.text(), /data-mode="live" data-admin="true"/)
-  const image = await app.fetch(new Request(`https://build-check.example/${imageAsset}`, { method: 'HEAD' }), {})
-  assert.equal(image.headers.get('content-type'), 'image/jpeg')
+  const image = await app.fetch(new Request(`https://build-check.example/${fistAsset}`), {})
+  assert.equal(image.headers.get('content-type'), 'image/svg+xml')
+  assert.match(await image.text(), /<svg\b/)
   assert.equal((await app.fetch(new Request('https://build-check.example/server.mjs'), {})).status, 404)
   console.log(`Built and checked ${entrypoint}`)
 }
