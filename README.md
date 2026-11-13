@@ -2,31 +2,33 @@
 
 根据组织决议投票流程设计的中文工作台。成员发起动议，全国代表查阅通报和提出推翻动议，审核员处理全国动议，统筹组指派执行人并跟进执行报告。
 
-## 在线演示
+## 在线投票
 
-GitHub Pages 公开演示从空白动议列表开始，进度仅保存在当前浏览器。通过右上角身份菜单切换成员、全国代表、审核员或统筹组。菜单还可快进演示时间，体验异议期结束、计票和后续处理。
+GitHub Pages 是公开入口，实际登录与投票在链接指向的正式站点进行。选民使用组织代号和管理员单独发放的个人登录码。代号可以是自选网名，由管理员按合资格名册登记，一名选民只登记一个账号。
 
-发布设置为仓库 **Settings → Pages → Deploy from a branch → `main` → `/docs`**。公开站点只托管 `docs/` 中的静态演示。
+正式站点的「名册管理」需要独立管理员密钥。管理员可登记代号、地区、小组和权限，生成、换发或停用个人登录码。请私下交付登录码。每轮表决由服务器校验资格和已投票状态。按人表决时每个账号一票，代表按组表决时每组一票。新账号不会加入已经开启的表决。
+
+GitHub Pages 设置为 **Settings → Pages → Deploy from a branch → `main` → `/docs`**。正式托管 Worker 位于 `site/`，使用 D1 绑定 `DB` 和独立的 `OPERATOR_CODE_HASH` 密钥配置。`site/build.mjs` 可构建包含投票界面和迁移脚本的部署包。
 
 ## 组织内正式使用
 
 安装 Node.js 24 或更高版本。在仓库根目录运行以下命令创建账号并启动服务器，无需安装依赖。
 
 ```sh
-node server.mjs add-user --name 许青 --region 华东 --group 华东小组 --roles member,representative,coordinator
-node server.mjs add-user --name 顾宁 --region 华北 --group 华北小组 --roles member,reviewer
-node server.mjs add-user --name 林澄 --region 华东 --group 华东小组 --roles member
+node server.mjs add-user --codename 青松 --region 华东 --group 华东小组 --roles member,representative,coordinator
+node server.mjs add-user --codename 北辰 --region 华北 --group 华北小组 --roles member,reviewer
+node server.mjs add-user --codename 红叶 --region 华东 --group 华东小组 --roles member
 node server.mjs
 ```
 
-访问 `http://127.0.0.1:8787`，用 `add-user` 输出的个人登录码登录。各参与地区应配置统筹组角色，各参与代表表决的小组应配置代表。角色可叠加，正式成员需包含 `member` 角色。帐号和登录码由组织运营人员通过安全渠道分发。
+访问 `http://127.0.0.1:8787`，用 `add-user` 输出的代号和个人登录码登录。各参与地区应配置统筹组角色，各参与代表表决的小组应配置代表。角色可叠加，正式成员需包含 `member` 角色。账号和登录码由组织运营人员单独分发。
 
 - `node server.mjs list-users` 查看账号、角色和账号 ID。
 - `node server.mjs rotate-token <ID>` 换发登录码并注销原会话。
 - `node server.mjs disable-user <ID>` 停用账号并注销会话。
 - `node --test` 运行流程与 HTTP 集成测试。
 
-多人使用时，在组织控制的服务器运行 `server.mjs`，经 HTTPS 反向代理转发到本地监听端口，并设置 `VOTING_ORIGIN` 为实际公开源，例如 `https://vote.example.org`。默认监听 `127.0.0.1:8787`，可通过 `VOTING_HOST` 和 `PORT` 配置。`VOTING_DB` 可指定 SQLite 文件路径，默认使用 `data/voting.sqlite`。帐号、会话、动议和原始选票存放在 SQLite 中，应限制数据库及备份的读取权限。GitHub Pages 演示和正式服务各自使用独立数据。
+自行托管时，在组织控制的服务器运行 `server.mjs`，经 HTTPS 反向代理转发到本地监听端口，并设置 `VOTING_ORIGIN` 为实际公开源，例如 `https://vote.example.org`。默认监听 `127.0.0.1:8787`，可通过 `VOTING_HOST` 和 `PORT` 配置。`VOTING_DB` 可指定 SQLite 文件路径，默认使用 `data/voting.sqlite`。请限制对账号、会话、动议、原始选票和数据库备份的读取权限。
 
 ## 流程规则
 

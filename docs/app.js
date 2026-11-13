@@ -1,11 +1,8 @@
-import { applyAction, viewState } from './workflow.js'
-import { createDemo, demoActors, migrateDemo } from './demo.js?v=2'
+import { adminPage, adminRequest } from './admin.js?v=4'
 
 const app = document.querySelector('#app')
 const dialog = document.querySelector('#dialog')
 const toast = document.querySelector('#toast')
-const storageKey = 'council-ballot-demo-v2'
-const legacyStorageKey = 'council-ballot-demo-v1'
 const roles = { member: '正式成员', reviewer: '动议审核员', representative: '全国代表', coordinator: '统筹组', admin: '管理员' }
 const stages = { review: '待审核', challenge: '异议期', override: '推翻表决', discussion: '小组讨论', ballot: '表决中', report: '待通报', assignment: '待指派', execution: '执行中', resolved: '已完成', failed: '未形成决议', stopped: '已停止' }
 const actionNames = { review: '提交审核决定', challenge: '提出推翻动议', closeChallenge: '确认审核决定生效', discuss: '提交讨论摘要', openBallot: '开启代表表决', vote: '提交选票', closeBallot: '结束表决并计票', publish: '发布通报', assign: '指派执行人', complete: '提交执行报告' }
@@ -15,8 +12,11 @@ const nav = { home: ['◫', '工作台'], motions: ['≡', '全部动议'], task
 const apiBase = new URL('./api/', window.location.href)
 const dateFormat = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
 const longDateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'full' })
-const isDemo = document.documentElement.dataset.mode === 'demo'
-let demo
+const { mode, votingUrl, admin: adminEnabled } = document.documentElement.dataset
+const isPortal = mode === 'portal'
+let operator = false
+let users = []
+let credential = null
 let actor = null
 let state = { motions: [], notices: [] }
 let page = 'home'
@@ -40,43 +40,12 @@ const canCreate = () => actor?.roles.includes('member')
 const isResolution = motion => motion.scope === 'national' && !!motion.resolution
 const isVoting = motion => ['ballot', 'override'].includes(motion.stage)
 const sorted = motions => [...motions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-const now = () => Date.now() + (isDemo ? demo.offset : 0)
 
 function displayToast(message) {
   clearTimeout(toastTimer)
   toast.textContent = message
   toast.hidden = false
   toastTimer = setTimeout(() => { toast.hidden = true }, 4200)
-}
-
-function saveDemo() {
-  try {
-    localStorage.setItem(storageKey, JSON.stringify(demo))
-    localStorage.removeItem(legacyStorageKey)
-  } catch { /* Preview can continue in memory. */ }
-}
-
-function readDemo(key) {
-  const stored = JSON.parse(localStorage.getItem(key))
-  if (Array.isArray(stored?.state?.motions) && Array.isArray(stored.state.notices) &&
-      Number.isInteger(stored.state.nextId) && Number.isFinite(stored.offset) &&
-      demoActors.some(person => person.id === stored.actorId)) return stored
-  return null
-}
-
-function loadDemo() {
-  try {
-    const stored = readDemo(storageKey)
-    if (stored) return stored
-    const legacy = readDemo(legacyStorageKey)
-    if (legacy) return migrateDemo(legacy)
-  } catch { /* Preview can continue in memory. */ }
-  return demo ?? createDemo()
-}
-
-function refreshDemo() {
-  actor = demoActors.find(person => person.id === demo.actorId)
-  state = viewState(demo.state, actor, now())
 }
 
 async function request(path, payload) {
@@ -120,7 +89,7 @@ function shell(content) {
   const activePage = page === 'detail' ? previousPage : page
   const taskCount = state.motions.filter(motion => motion.allowedActions.length).length
   const navigation = Object.entries(nav).map(([id, [glyph, label]]) => `<button type="button" data-do="nav:${id}" ${activePage === id ? 'aria-current="page"' : ''}>${icon(glyph)}<span>${label}</span>${id === 'tasks' && taskCount ? `<span class="count">${taskCount}</span>` : ''}</button>`).join('')
-  return `<div class="shell"><aside class="sidebar"><button type="button" class="brand" data-do="nav:home">${brand()}</button><p class="nav-title">工作空间</p><nav class="nav" aria-label="主要导航">${navigation}</nav><div class="sidebar-footer"><span class="mode-chip">${isDemo ? '本地演示' : '正式空间'}</span><small>${isDemo ? '数据保存在此浏览器' : esc(actor.region || '全国工作空间')}</small></div></aside><div class="workspace"><header class="topbar"><div class="crumb"><span>${isDemo ? '演示空间' : '组织空间'}</span><span aria-hidden="true">/</span><strong>${page === 'detail' ? '动议详情' : nav[page][1]}</strong></div><div class="top-actions">${isDemo ? '' : button('refresh', '刷新', 'compact', '↻')}<button type="button" class="actor" data-do="actor" aria-label="${isDemo ? '切换演示身份' : '账号菜单'}">${actorMarkup(actor)}<span class="chevron" aria-hidden="true">⌄</span></button></div></header><main id="main" class="content" tabindex="-1">${content}</main></div></div>`
+  return `<div class="shell"><aside class="sidebar"><button type="button" class="brand" data-do="nav:home">${brand()}</button><p class="nav-title">工作空间</p><nav class="nav" aria-label="主要导航">${navigation}</nav><div class="sidebar-footer"><span class="mode-chip">正式空间</span><small>${esc(actor.region || '全国工作空间')}</small></div></aside><div class="workspace"><header class="topbar"><div class="crumb"><span>组织空间</span><span aria-hidden="true">/</span><strong>${page === 'detail' ? '动议详情' : nav[page][1]}</strong></div><div class="top-actions">${button('refresh', '刷新', 'compact', '↻')}<button type="button" class="actor" data-do="actor" aria-label="账号菜单">${actorMarkup(actor)}<span class="chevron" aria-hidden="true">⌄</span></button></div></header><main id="main" class="content" tabindex="-1">${content}</main></div></div>`
 }
 
 function heading(title, summary, end = '') {
@@ -156,7 +125,7 @@ function home() {
     ['◈', '正在表决', state.motions.filter(isVoting).length, 'voting'],
     ['◇', '已形成决议', state.motions.filter(isResolution).length, 'nav:resolutions']
   ]
-  return `${heading('工作台', '查看动议进展，处理待办事项。', `<p class="page-date">${icon('▦')}${longDateFormat.format(now())}</p>`)}<section class="hero"><div><h2>${canCreate() ? '发起组织动议' : '查看组织动议'}</h2><p>地区事务由本地区表决。全国动议经审核与通报后，按指定方式表决。</p><div class="hero-actions">${canCreate() ? button('create', '发起动议', 'hero-main', '+') : button('nav:motions', '查看动议', 'hero-main')}${button('nav:flow', '查看投票流程', 'hero-alt', '↗')}</div></div></section><div class="metrics">${metrics.map(([glyph, label, value, target]) => `<button class="metric" type="button" data-do="${target}"><span class="metric-icon icon" aria-hidden="true">${glyph}</span><span><span class="caption">${label}</span><b>${value}</b></span></button>`).join('')}</div><div class="board">${table('动议一览', '按最近更新排序', true)}<div class="side-stack"><section class="panel"><header class="panel-head"><div><h2>最新通报</h2><p>发给全国代表的流程通报</p></div>${button('nav:notices', '全部', 'ghost compact', '↗')}</header>${noticeList(state.notices.slice(0, 3))}</section><section class="guide">${button(isDemo ? 'actor' : 'nav:flow', isDemo ? '切换演示身份' : '查看流程说明', 'ghost compact', '⇄')}<p>${isDemo ? '以成员、代表、审核员或统筹组身份体验完整流程。' : '查看审核、表决、通报与执行的步骤。'}</p></section></div></div>`
+  return `${heading('工作台', '查看动议进展，处理待办事项。', `<p class="page-date">${icon('▦')}${longDateFormat.format(Date.now())}</p>`)}<section class="hero"><div><h2>${canCreate() ? '发起组织动议' : '查看组织动议'}</h2><p>地区事务由本地区表决。全国动议经审核与通报后，按指定方式表决。</p><div class="hero-actions">${canCreate() ? button('create', '发起动议', 'hero-main', '+') : button('nav:motions', '查看动议', 'hero-main')}${button('nav:flow', '查看投票流程', 'hero-alt', '↗')}</div></div></section><div class="metrics">${metrics.map(([glyph, label, value, target]) => `<button class="metric" type="button" data-do="${target}"><span class="metric-icon icon" aria-hidden="true">${glyph}</span><span><span class="caption">${label}</span><b>${value}</b></span></button>`).join('')}</div><div class="board">${table('动议一览', '按最近更新排序', true)}<div class="side-stack"><section class="panel"><header class="panel-head"><div><h2>最新通报</h2><p>发给全国代表的流程通报</p></div>${button('nav:notices', '全部', 'ghost compact', '↗')}</header>${noticeList(state.notices.slice(0, 3))}</section><section class="guide">${button('nav:flow', '查看流程说明', 'ghost compact', '⇢')}<p>查看审核、表决、通报与执行的步骤。</p></section></div></div>`
 }
 
 function flowNode(title, description = '', kind = '') {
@@ -287,12 +256,23 @@ function motionDetail(motion) {
 }
 
 function login() {
-  return `<main id="main" class="login-shell"><section class="panel login-card"><div class="brand">${brand()}</div><h1>进入组织空间</h1><p>使用组织分发的个人登录码。</p><form class="form" data-submit="login"><label class="field"><span>登录码</span><input type="password" name="token" autocomplete="current-password" required maxlength="128"></label><div class="form-error" role="alert"></div><button type="submit" class="button primary">登录</button></form></section></main>`
+  const entry = isPortal
+    ? `<p>请使用名册中的组织代号和个人登录码。</p>${votingUrl ? `<a class="button primary portal-link" href="${esc(votingUrl)}">进入正式投票</a>` : '<p role="status">正式投票服务正在配置。</p>'}`
+    : `<p>使用组织代号和管理员发给你的个人登录码。</p><form class="form" data-submit="login">${field('组织代号', '<input name="codename" autocomplete="username" maxlength="100" required>')}${field('个人登录码', '<input type="password" name="token" autocomplete="current-password" maxlength="128" required>')}<div class="form-error" role="alert"></div><button type="submit" class="button primary">登录</button></form>`
+  const links = `<div class="login-links">${button('nav:flow', '流程说明', 'ghost compact')}${adminEnabled ? '<a href="#admin" class="button ghost compact">名册管理</a>' : ''}</div>`
+  return `<main id="main" class="login-shell"><section class="panel login-card"><div class="brand">${brand()}</div><h1>${isPortal ? '组织决议投票' : '进入组织空间'}</h1>${entry}${links}</section></main>`
 }
 
 function render(focus = false) {
+  if (adminEnabled && window.location.hash === '#admin') {
+    app.innerHTML = adminPage({ operator, users, credential })
+    return
+  }
   if (!actor) {
-    app.innerHTML = login()
+    app.innerHTML = page === 'flow'
+      ? `<main id="main" class="content" tabindex="-1"><div class="detail-top">${button('nav:home', '返回入口', 'compact', '‹')}</div>${flowPage()}</main>`
+      : login()
+    if (focus) document.querySelector('#main').focus({ preventScroll: true })
     return
   }
   const activeMotion = state.motions.find(motion => motion.id === detailId)
@@ -366,7 +346,7 @@ function actionDialog(action) {
   } else if (action === 'publish') {
     fields = motion.scope === 'regional' ? '<p class="form-help">通报仅包含通过或未通过的结果，全国代表可以查看。</p>' : textArea('summary', '停止处理结果', 1500)
   } else if (action === 'assign') {
-    fields = `${field('执行人', '<input name="owner" required maxlength="120">', '可填写账号编号或姓名。组织成员姓名唯一时可直接提交执行报告。')}${textArea('plan', '执行计划', 3000, '执行情况向统筹组报告。')}`
+    fields = `${field('执行人', '<input name="owner" required maxlength="120">', '可填写账号编号或组织代号，便于执行人提交报告。')}${textArea('plan', '执行计划', 3000, '执行情况向统筹组报告。')}`
   } else if (action === 'complete') {
     fields = textArea('summary', '提交给统筹组的执行报告', 3000)
   } else if (paragraphs[action]) {
@@ -376,11 +356,25 @@ function actionDialog(action) {
 }
 
 function showActorMenu() {
-  if (!isDemo) {
-    showDialog('当前账号', `<p>${esc(actor.name)} · ${esc(roleLabel(actor))}</p><p>${esc([actor.region, actor.group, actor.id].filter(Boolean).join(' · '))}</p><div class="form-actions">${button('logout', '退出登录', 'danger')}</div>`)
-    return
-  }
-  showDialog('切换演示身份', `<p>演示数据仅保存在当前浏览器。</p><div class="actor-list">${demoActors.map(person => `<button type="button" class="actor" data-do="actor:${person.id}" aria-pressed="${actor.id === person.id}">${actorMarkup(person)}<span class="row-scope">${esc(person.region)}</span></button>`).join('')}</div><div class="clock-box"><p>演示时间 ${time(new Date(now()).toISOString())}。可快进以体验异议截止和计票。</p><div class="form-actions">${button('advance:1', '快进 1 天', 'compact')}${button('advance:3', '快进 3 天', 'compact')}${button('reset', '重置演示', 'compact danger')}</div></div>`)
+  showDialog('当前账号', `<p>${esc(actor.name)} · ${esc(roleLabel(actor))}</p><p>${esc([actor.region, actor.group, actor.id].filter(Boolean).join(' · '))}</p><div class="form-actions">${button('logout', '退出登录', 'danger')}</div>`)
+}
+
+async function refreshRoster() {
+  const roster = await request('admin/users')
+  users = roster.users
+}
+
+async function logout() {
+  await request('logout', {})
+  refreshGeneration++
+  actor = null
+  operator = false
+  credential = null
+  users = []
+  state = { motions: [], notices: [] }
+  page = 'home'
+  dialog.close()
+  render()
 }
 
 async function updateFromServer() {
@@ -417,39 +411,13 @@ function routeAction(command) {
     previousPage = page === 'detail' ? previousPage : page
     detailId = value
     page = 'detail'
-    if (isDemo) refreshDemo()
     return render(true)
   }
-  if (type === 'actor') {
-    if (!value) return showActorMenu()
-    demo.actorId = value
-    saveDemo()
-    refreshDemo()
-    dialog.close()
-    render()
-    return displayToast(`已切换为${actor.name}。`)
-  }
-  if (type === 'advance') {
-    demo.offset += Number(value) * 86400000
-    saveDemo()
-    refreshDemo()
-    render()
-    return showActorMenu()
-  }
-  if (type === 'reset') {
-    return formDialog('重置演示', 'reset', '<p class="form-help">将清除当前浏览器里的演示动议、通报和操作进度。</p>', '确认重置')
-  }
+  if (type === 'actor' && actor) return showActorMenu()
+  if (type === 'admin-back') { window.location.hash = ''; return }
+  if (type === 'admin-refresh') return refreshRoster().then(() => { credential = null; render() }).catch(error => displayToast(error.message))
   if (type === 'refresh') return updateFromServer()
-  if (type === 'logout') {
-    return request('logout', {}).then(() => {
-      refreshGeneration++
-      actor = null
-      state = { motions: [], notices: [] }
-      page = 'home'
-      dialog.close()
-      render()
-    }).catch(error => displayToast(error.message))
-  }
+  if (type === 'logout' || type === 'admin-logout') return logout().catch(error => displayToast(error.message))
   if (type === 'dismiss') return dialog.close()
   if (type === 'create' && canCreate()) return createDialog()
   if (type === 'action') return actionDialog(value)
@@ -466,40 +434,43 @@ function createPayload(type, fields) {
 
 async function submitForm(form) {
   const type = form.dataset.submit
-  const fields = Object.fromEntries(new FormData(form))
+  const formData = new FormData(form)
+  const fields = Object.fromEntries(formData)
   const submit = form.querySelector('[type="submit"]')
   const errorArea = form.querySelector('.form-error')
   errorArea.textContent = ''
   submit.disabled = true
   try {
     if (type === 'login') {
-      await request('login', { token: fields.token.trim() })
+      await request('login', { codename: fields.codename.trim(), token: fields.token.trim() })
+      operator = false
+      users = []
+      credential = null
       await fetchLiveState()
       navTo('home')
       return
     }
-    if (type === 'reset') {
-      demo = createDemo()
-      saveDemo()
-      refreshDemo()
-      dialog.close()
-      navTo('home')
-      return displayToast('演示数据已重置。')
+    if (type.startsWith('admin-')) {
+      if (type === 'admin-disable' && !window.confirm('停用此账号并结束其当前会话？')) return
+      if (type === 'admin-rotate' && !window.confirm('换发个人登录码并结束此账号当前会话？')) return
+      const response = await adminRequest(type, formData, request)
+      if (type === 'admin-login') {
+        operator = response.operator === true
+        actor = null
+        state = { motions: [], notices: [] }
+      }
+      credential = response.token ? response : null
+      await refreshRoster().catch(error => displayToast(error.message))
+      render()
+      return
     }
     const payload = createPayload(type, fields)
     const existing = new Set(state.motions.map(motion => motion.id))
-    if (isDemo) {
-      demo = { ...loadDemo(), actorId: actor.id }
-      demo.state = applyAction(demo.state, actor, payload, now(), demoActors)
-      saveDemo()
-      refreshDemo()
-    } else {
-      refreshGeneration++
-      const updated = await request('actions', payload)
-      refreshGeneration++
-      actor = updated.actor
-      state = updated.state
-    }
+    refreshGeneration++
+    const updated = await request('actions', payload)
+    refreshGeneration++
+    actor = updated.actor
+    state = updated.state
     dialog.close()
     if (type === 'create') {
       const newMotion = state.motions.find(motion => !existing.has(motion.id) && motion.author.id === actor.id && motion.title === payload.title.trim())
@@ -508,9 +479,12 @@ async function submitForm(form) {
     render()
     displayToast(type === 'vote' ? '选票已提交。' : '操作已完成。')
   } catch (error) {
-    if (error.status === 401 && type !== 'login') {
+    if (error.status === 401 && !['login', 'admin-login'].includes(type)) {
       dialog.close()
       actor = null
+      operator = false
+      credential = null
+      users = []
       state = { motions: [], notices: [] }
       render()
       displayToast('登录已过期，请重新登录。')
@@ -553,23 +527,19 @@ document.addEventListener('submit', event => {
   submitForm(event.target)
 })
 
-window.addEventListener('storage', event => {
-  if (!isDemo || event.key !== storageKey || dialog.open) return
-  demo = loadDemo()
-  refreshDemo()
+window.addEventListener('hashchange', () => {
+  credential = null
   render()
 })
 
 async function start() {
   try {
-    if (isDemo) {
-      demo = loadDemo()
-      refreshDemo()
-      saveDemo()
-    } else {
+    if (!isPortal) {
       const session = await request('session')
       if (!session || !Object.hasOwn(session, 'actor')) throw new Error('服务暂时无法连接。')
+      operator = session.operator === true
       if (session.actor) await fetchLiveState()
+      if (operator) await refreshRoster()
     }
     render()
   } catch (error) {

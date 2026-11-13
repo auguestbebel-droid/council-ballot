@@ -15,6 +15,7 @@ const sessionSeconds = 12 * 60 * 60;
 const maxBodyBytes = 32 * 1024;
 const roleNames = ['member', 'reviewer', 'representative', 'coordinator', 'admin'];
 const loopbackHosts = ['127.0.0.1', 'localhost', '[::1]'];
+const invalidCodename = /[\p{Cc}\p{Cf}]/u;
 const contentTypes = {
   html: 'text/html; charset=utf-8',
   css: 'text/css; charset=utf-8',
@@ -29,7 +30,7 @@ const contentTypes = {
   woff2: 'font/woff2',
 };
 const staticPaths = new Set([
-  '/index.html', '/styles.css', '/app.js', '/workflow.js', '/demo.js',
+  '/index.html', '/styles.css', '/app.js', '/admin.js',
   '/favicon.svg', '/favicon.ico',
 ]);
 const assetPath = /^\/assets\/[A-Za-z0-9][A-Za-z0-9_.-]*\.(?:svg|png|jpe?g|webp|avif|woff2)$/;
@@ -76,7 +77,44 @@ function openDatabase(path) {
   `);
   db.prepare('INSERT OR IGNORE INTO organization (id, state) VALUES (1, ?)')
     .run(JSON.stringify(createState()));
+  migrateCodenames(db);
   return db;
+}
+
+function codenameKey(value) {
+  if (typeof value !== 'string' || invalidCodename.test(value)) return null;
+  const display = value.trim();
+  if (display.length === 0 || display.length > 100) return null;
+  return display.normalize('NFKC').trim().toLowerCase() || null;
+}
+
+function migrateCodenames(db) {
+  if (db.prepare('PRAGMA table_info(users)').all().some(column => column.name === 'codename_key')) return;
+  transaction(db, () => {
+    if (db.prepare('PRAGMA table_info(users)').all().some(column => column.name === 'codename_key')) return;
+    db.exec('ALTER TABLE users ADD COLUMN codename_key TEXT');
+    const users = db.prepare('SELECT id, name FROM users ORDER BY rowid').all();
+    const reserved = new Set(users.map(user => codenameKey(user.name)).filter(Boolean));
+    const used = new Set();
+    const update = db.prepare('UPDATE users SET name = ?, codename_key = ? WHERE id = ?');
+    for (const user of users) {
+      let name = user.name;
+      let key = codenameKey(name);
+      if (!key || used.has(key)) {
+        const suffix = `-${user.id}`;
+        const base = key ? name.slice(0, 100 - suffix.length) : 'member';
+        name = `${base}${suffix}`;
+        key = codenameKey(name);
+        while (reserved.has(key) || used.has(key)) {
+          name = `member-${randomUUID()}`;
+          key = codenameKey(name);
+        }
+      }
+      used.add(key);
+      update.run(name, key, user.id);
+    }
+    db.exec('CREATE UNIQUE INDEX users_codename ON users(codename_key); DELETE FROM sessions;');
+  });
 }
 
 function transaction(db, operation) {
@@ -218,7 +256,7 @@ async function serveStatic(request, response, pathname) {
   }
   const extension = file.split('.').at(-1);
   if (file === '/index.html') {
-    contents = Buffer.from(contents.toString('utf8').replace('data-mode="demo"', 'data-mode="live"'));
+    contents = Buffer.from(contents.toString('utf8').replace('data-mode="portal"', 'data-mode="live"'));
   }
   response.writeHead(200, {
     'Content-Type': contentTypes[extension],
@@ -240,7 +278,7 @@ export function createVotingServer({ databasePath = defaultDatabase, origin } = 
   `);
   const lookupUser = db.prepare(`
     SELECT id, name, region, member_group, roles FROM users
-    WHERE login_hash = ? AND enabled = 1
+    WHERE codename_key = ? AND login_hash = ? AND enabled = 1
   `);
   const lookupRoster = db.prepare(`
     SELECT id, name, region, member_group, roles FROM users WHERE enabled = 1
@@ -295,12 +333,13 @@ export function createVotingServer({ databasePath = defaultDatabase, origin } = 
         json(response, 200, stateFor(requireActor(session, now)));
         return;
       case '/api/login': {
+        const key = codenameKey(body.codename);
         const loginToken = typeof body.token === 'string' ? body.token.trim() : '';
-        if (!tokenPattern.test(loginToken)) throw new HttpError(401, '登录码无效或已停用。');
+        if (!key || !tokenPattern.test(loginToken)) throw new HttpError(401, '代号或登录码无效。');
         const token = newToken();
         const actor = transaction(db, () => {
-          const actor = toActor(lookupUser.get(hashToken(loginToken)));
-          if (!actor) throw new HttpError(401, '登录码无效或已停用。');
+          const actor = toActor(lookupUser.get(key, hashToken(loginToken)));
+          if (!actor) throw new HttpError(401, '代号或登录码无效。');
           deleteExpiredSessions.run(now);
           if (session) deleteSession.run(hashToken(session));
           insertSession.run(hashToken(token), actor.id, now + sessionSeconds * 1000);
@@ -373,6 +412,7 @@ function cli(command, args, databasePath) {
   try {
     if (command === 'add-user') {
       const { values } = parseArgs({ args, options: {
+        codename: { type: 'string' },
         name: { type: 'string' },
         region: { type: 'string' },
         group: { type: 'string' },
@@ -384,10 +424,17 @@ function cli(command, args, databasePath) {
       }
       const id = randomUUID();
       const token = newToken();
-      db.prepare('INSERT INTO users (id, name, region, member_group, roles, login_hash) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(id, requireLabel(values.name, '姓名'), requireLabel(values.region, '地区'),
-          requireLabel(values.group, '小组'), JSON.stringify(roles), hashToken(token));
-      console.log(JSON.stringify({ id, token }));
+      if (values.name !== undefined && values.codename !== undefined) throw new Error('请只使用 --codename 指定代号。');
+      const codename = (values.codename ?? values.name)?.trim().normalize('NFC');
+      const key = codenameKey(codename);
+      if (!key) throw new Error('代号须为 1 到 100 个字符，且不能包含控制字符。');
+      const result = db.prepare(`
+        INSERT INTO users (id, name, region, member_group, roles, login_hash, codename_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(codename_key) DO NOTHING
+      `).run(id, codename, requireLabel(values.region, '地区'), requireLabel(values.group, '小组'),
+        JSON.stringify(roles), hashToken(token), key);
+      if (!result.changes) throw new Error('此代号已登记。');
+      console.log(JSON.stringify({ id, codename, token }));
       return;
     }
     if (command === 'list-users' && args.length === 0) {
