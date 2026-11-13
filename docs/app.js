@@ -132,13 +132,61 @@ function flowNode(title, description = '', kind = '') {
   return `<div class="flow-node ${kind}"><strong>${title}</strong>${description ? `<p>${description}</p>` : ''}</div>`
 }
 
-function flowArrow(label = '') {
-  return `<div class="flow-arrow"${label ? '' : ' aria-hidden="true"'}>${label ? `<span>${label}</span>` : ''}<i aria-hidden="true"></i></div>`
+function flowArrow(label = '', fromRight = false) {
+  return `<div class="flow-arrow${fromRight ? ' flow-from-right' : ''}"${label ? '' : ' aria-hidden="true"'}>${label ? `<span>${label}</span>` : ''}<i aria-hidden="true"></i></div>`
+}
+
+function flowSplit(left, right) {
+  return `<ul class="flow-split" role="list">${[left, right].map(([label, content]) => `
+    <li>${flowArrow(label)}${content}</li>`).join('')}</ul>`
+}
+
+function mobileFlowDiagram() {
+  return `<div class="flow-mobile">
+    ${flowNode('正式成员发起动议', '', 'flow-start')}
+    ${flowArrow()}
+    ${flowNode('仅涉及地区内部事务？', '', 'flow-decision')}
+    ${flowSplit(
+      ['是 · 地区事务', `${flowNode('地区自行表决', '仅限本地区成员参与。')}${flowArrow()}${flowNode('脱敏后通报全国代表', '只公布通过与否。', 'flow-end')}`],
+      ['否 · 全国动议', `${flowNode('动议审核员作出决定', '决定是否接受原动议，并确定表决范围和方式。')}${flowArrow()}${flowNode('审核决定通报全国代表')}`],
+    )}
+    ${flowArrow('全国动议继续', true)}
+    ${flowNode('异议期内有代表提出推翻动议？', '', 'flow-decision')}
+    ${flowSplit(
+      ['否 · 异议期届满', flowNode('原审核决定生效')],
+      ['是 · 提出推翻动议', flowNode('全国代表直接表决', '全国代表按人投票，无需审核员审核。')],
+    )}
+    ${flowArrow('提出推翻动议时', true)}
+    ${flowNode('推翻动议通过？', '', 'flow-decision')}
+    ${flowSplit(
+      ['否', flowNode('原审核决定生效')],
+      ['是', flowNode('撤销原审核决定', '原决定接受则改为停止，原决定停止则改为发起投票。')],
+    )}
+    ${flowArrow('依据生效的审核决定')}
+    ${flowNode('原动议是否进入投票？', '', 'flow-decision')}
+    ${flowSplit(
+      ['否 · 停止原动议', flowNode('审核员通报处理结果', '', 'flow-end')],
+      ['是 · 进入表决', flowNode('按选定方式表决')],
+    )}
+    ${flowArrow('原动议进入投票时', true)}
+    ${flowNode('采用哪种表决方式？', '', 'flow-decision')}
+    ${flowSplit(
+      ['代表表决', `${flowNode('各地小组先讨论')}${flowArrow()}${flowNode('代表按组投票')}`],
+      ['全体成员表决', flowNode('成员直接投票')],
+    )}
+    ${flowArrow('原动议计票')}
+    ${flowNode('表决通过？', '', 'flow-decision')}
+    ${flowSplit(
+      ['否', flowNode('本次表决未形成决议', '', 'flow-end')],
+      ['是', flowNode('形成组织决议', '统筹组指派执行人。执行情况向统筹组报告。', 'flow-end flow-confirmed')],
+    )}
+  </div>`
 }
 
 function flowDiagram() {
   return `<figure class="panel flow-diagram" aria-labelledby="flow-diagram-title">
     <figcaption><h2 id="flow-diagram-title">组织决议投票流程图</h2></figcaption>
+    <div class="flow-desktop">
     <div class="flow-diagram-entry">
       ${flowNode('正式成员发起动议', '', 'flow-start')}
       ${flowArrow()}
@@ -222,6 +270,8 @@ function flowDiagram() {
         </div>
       </li>
     </ul>
+    </div>
+    ${mobileFlowDiagram()}
   </figure>`
 }
 
